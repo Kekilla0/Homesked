@@ -1,0 +1,18 @@
+services:
+  homesked:
+    build: .
+    image: homesked:latest
+    container_name: homesked
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    volumes:
+      - homesked-data:/data
+    environment:
+      - PORT=3000
+      - DB_PATH=/data/homesked.db
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-portainer}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+
+volumes:
+  homesked-data:

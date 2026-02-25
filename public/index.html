@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HomeSKED</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<!-- Auth View (shown when logged out) -->
+<div id="auth-view">
+  <div class="auth-box">
+    <div class="auth-logo">
+      <div class="logo-mark">HOMESKED</div>
+      <div class="logo-sub">Home Maintenance System</div>
+    </div>
+    <div class="auth-tab-row">
+      <button class="auth-tab active" id="tab-login" onclick="showAuthTab('login')">Login</button>
+      <button class="auth-tab" id="tab-register" onclick="showAuthTab('register')">Register</button>
+    </div>
+    <div id="auth-error" class="alert alert-error" style="display:none"></div>
+
+    <!-- Login Form -->
+    <div id="form-login">
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="login-username" placeholder="Enter username" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="login-password" placeholder="Enter password" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Log In</button>
+    </div>
+
+    <!-- Register Form -->
+    <div id="form-register" style="display:none">
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" id="reg-username" placeholder="Choose a username">
+      </div>
+      <div class="form-group">
+        <label>Email (optional)</label>
+        <input type="email" id="reg-email" placeholder="your@email.com">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="reg-password" placeholder="At least 6 characters">
+      </div>
+      <button class="btn btn-primary" style="width:100%" onclick="doRegister()">Create Account</button>
+      <p class="auth-hint">First account created becomes admin.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Main App (shown when logged in) -->
+<div id="app" style="display:none">
+
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">HOMESKED</div>
+      <div class="logo-sub">Maintenance System</div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Navigation</div>
+      <a class="nav-link" id="nav-dashboard" onclick="navigate('dashboard')">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M0 2a2 2 0 0 1 2-2h3v5H0V2zm0 6h5v8H2a2 2 0 0 1-2-2V8zm6 8V8h10v6a2 2 0 0 1-2 2H6zm0-9V0h8l2 2v5H6z"/></svg>
+        Dashboard
+      </a>
+      <a class="nav-link" id="nav-homes" onclick="navigate('homes')">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8.354 1.146a.5.5 0 0 0-.708 0l-6 6A.5.5 0 0 0 1.5 7.5v7a.5.5 0 0 0 .5.5h4.5v-4h3v4H14a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.146-.354L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.354 1.146z"/></svg>
+        Homes
+      </a>
+    </div>
+
+    <div class="sidebar-section" id="context-nav" style="display:none">
+      <div class="sidebar-section-label">Current Home</div>
+      <a class="nav-link" id="nav-rooms" onclick="navigate('rooms')">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1H1V2zm0 2h14v9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4z"/></svg>
+        Rooms
+      </a>
+      <a class="nav-link" id="nav-equipment" onclick="navigate('equipment')" style="display:none">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5l2.404.961L10.404 2l-2.218-.887zm3.564 1.426L5.596 5 8 5.961 14.154 3.5l-2.404-.961zm3.25 1.7-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.838L1 4.239v7.923l6.5 2.6zM7.443.184a1.5 1.5 0 0 1 1.114 0l7.129 2.852A.5.5 0 0 1 16 3.5v8.662a1 1 0 0 1-.629.928l-7.185 2.874a.5.5 0 0 1-.372 0L.63 13.09a1 1 0 0 1-.63-.928V3.5a.5.5 0 0 1 .314-.464L7.443.184z"/></svg>
+        Equipment
+      </a>
+      <a class="nav-link" id="nav-tasks" onclick="navigate('tasks')" style="display:none">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-3.99 4.99a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l2.094 2.093 3.473-4.425a.267.267 0 0 1 .02-.022z"/><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zm1.5 0a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5h-11z"/></svg>
+        Tasks
+      </a>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="user-avatar" id="user-avatar">?</div>
+        <div>
+          <div class="user-name" id="user-name-display">—</div>
+          <div class="user-role" id="user-role-display">—</div>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:12px" onclick="doLogout()">Sign Out</button>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div id="main">
+    <!-- Top Bar -->
+    <div class="topbar">
+      <div class="breadcrumb" id="breadcrumb"></div>
+      <div class="topbar-actions" id="topbar-actions"></div>
+    </div>
+
+    <!-- Page Views -->
+    <div class="page-content" id="page-content">
+      <div class="loading-center"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Container -->
+<div id="modal-container"></div>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<script src="/js/api.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
