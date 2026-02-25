@@ -29,7 +29,8 @@ app.use('/api/rooms',     require('./routes/rooms'));
 app.use('/api/equipment', require('./routes/equipment'));
 app.use('/api/tasks',     require('./routes/tasks'));
 app.use('/api/dashboard', require('./routes/dashboard'));
-app.use('/api/presets',   require('./routes/presets').router);
+app.use('/api/presets',      require('./routes/presets').router);
+app.use('/api/room-presets', require('./routes/room-presets').router);
 
 app.get('/api/version', (req, res) => {
   res.json({ version, built_at: BUILT_AT });

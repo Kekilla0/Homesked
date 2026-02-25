@@ -258,3 +258,197 @@ input[type="datetime-local"] { color-scheme: dark; }
   .two-col, .form-row, .form-row-3 { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── Sidebar Tree ───────────────────────────────────────────── */
+.tree-home-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 12px 20px 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tree-room {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  position: relative;
+}
+
+.tree-room-toggle {
+  width: 28px;
+  height: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: color var(--transition);
+  user-select: none;
+  background: none;
+  border: none;
+}
+.tree-room-toggle:hover { color: var(--text); }
+
+.tree-room-name {
+  flex: 1;
+  padding: 6px 20px 6px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-room-name:hover { color: var(--text); }
+.tree-room-name.active { color: var(--text); }
+
+.tree-room-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+.tree-room-badge.overdue { background: rgba(232,64,64,0.2); color: var(--danger); }
+
+.tree-children {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.2s ease;
+}
+.tree-children.open { max-height: 400px; }
+
+.tree-child-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px 5px 36px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition);
+  border-left: 2px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-child-link:hover { color: var(--text); background: rgba(255,255,255,0.02); }
+.tree-child-link.active { color: var(--accent); border-left-color: var(--accent); background: rgba(232,168,48,0.05); }
+.tree-child-link.room-tasks { color: var(--cyan); }
+.tree-child-link.room-tasks:hover { color: #5ddae4; }
+.tree-child-link.room-tasks.active { color: var(--cyan); border-left-color: var(--cyan); background: rgba(56,200,212,0.05); }
+
+.tree-equip-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px 4px 48px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition);
+  border-left: 2px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-equip-link:hover { color: var(--text); background: rgba(255,255,255,0.02); }
+.tree-equip-link.active { color: var(--accent); border-left-color: var(--accent); background: rgba(232,168,48,0.05); }
+.tree-equip-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--border-lt); flex-shrink: 0; }
+.tree-equip-link.active .tree-equip-dot { background: var(--accent); }
+
+.tree-loading { padding: 6px 36px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+
+/* ── All-tasks view ─────────────────────────────────────────── */
+.all-tasks-group { margin-bottom: 28px; }
+.all-tasks-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.all-tasks-group-title { font-size: 14px; font-weight: 600; }
+.all-tasks-group-meta  { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); letter-spacing: 1px; }
+
+/* ── Task preset picker ─────────────────────────────────────── */
+.preset-task-picker {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+.preset-task-picker-header {
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+}
+.preset-task-list { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.preset-task-item {
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--transition);
+  font-size: 13px;
+}
+.preset-task-item:hover { background: rgba(232,168,48,0.08); color: var(--accent); }
+.preset-task-item-meta { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 2px; }
+
+/* ── View toggle ────────────────────────────────────────────── */
+.view-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.view-toggle-btn {
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.view-toggle-btn.active { background: var(--accent); color: #0a0a0a; }
+
+/* ── Room preset summary ────────────────────────────────────── */
+.room-preset-summary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-top: 8px;
+  display: none;
+  gap: 16px;
+}
+.room-preset-summary.visible { display: flex; flex-wrap: wrap; align-items: flex-start; }
+.room-preset-col { flex: 1; min-width: 160px; }
+.room-preset-col-title { font-family: var(--font-mono); font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.room-preset-item { font-size: 12px; color: var(--text); padding: 2px 0; display: flex; align-items: center; gap: 6px; }
+.room-preset-item::before { content: '·'; color: var(--accent); }
+.room-preset-item.muted { color: var(--text-muted); }

@@ -5,9 +5,13 @@ const State = {
   currentHome: null,
   currentRoom: null,
   currentEquipment: null,
-  taskContext: 'equipment', // 'equipment' | 'room'
   view: 'dashboard',
   presets: [],
+  roomPresets: [],
+  // Sidebar tree state
+  sidebarRooms: [],
+  sidebarEquipment: {},   // roomId -> [] of equipment
+  sidebarExpanded: new Set(),
 };
 
 // ── Utilities ────────────────────────────────────────────────
@@ -22,8 +26,12 @@ function toast(msg, type = 'success') {
 function esc(str) {
   if (!str) return '';
   return String(str)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function J(obj) {
+  return JSON.stringify(obj).replace(/"/g, '&quot;');
 }
 
 function formatDate(d) {
@@ -34,7 +42,6 @@ function formatDate(d) {
 function formatDateTimeLocal(d) {
   if (!d) return '';
   const dt = new Date(d);
-  // Format as YYYY-MM-DDTHH:MM for datetime-local input
   const pad = n => String(n).padStart(2,'0');
   return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 }
@@ -59,7 +66,7 @@ function daysUntil(d) {
 function dueDateLabel(task) {
   if (task.trigger_type === 'usage') {
     const diff = (task.next_due_usage || 0) - (task.current_usage_at_check || 0);
-    if (diff <= 0) return `${Math.abs(diff).toLocaleString()} ${task.usage_unit || 'units'} overdue`;
+    if (diff <= 0) return `${Math.abs(diff).toLocaleString()} ${task.usage_unit || 'units'} over`;
     return `${diff.toLocaleString()} ${task.usage_unit || 'units'} to go`;
   }
   if (!task.next_due_at) return '—';
@@ -114,6 +121,135 @@ function closeModal() {
   if (m) m.remove();
 }
 
+// ── Sidebar Tree ─────────────────────────────────────────────
+async function loadSidebarRooms(homeId) {
+  try {
+    const rooms = await API.getRooms(homeId);
+    State.sidebarRooms = rooms;
+    renderSidebarTree();
+  } catch {}
+}
+
+async function loadSidebarEquipment(roomId) {
+  try {
+    const items = await API.getEquipment(roomId);
+    State.sidebarEquipment[roomId] = items;
+    renderSidebarTree();
+  } catch {}
+}
+
+function toggleSidebarRoom(roomId) {
+  if (State.sidebarExpanded.has(roomId)) {
+    State.sidebarExpanded.delete(roomId);
+  } else {
+    State.sidebarExpanded.add(roomId);
+    if (!State.sidebarEquipment[roomId]) {
+      loadSidebarEquipment(roomId);
+    }
+  }
+  renderSidebarTree();
+}
+
+function renderSidebarTree() {
+  const container = document.getElementById('sidebar-tree');
+  if (!container) return;
+
+  if (!State.currentHome || !State.sidebarRooms.length) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const homeLabel = `
+    <div class="tree-home-label">
+      🏠 ${esc(State.currentHome.name)}
+    </div>`;
+
+  const roomItems = State.sidebarRooms.map(room => {
+    const isExpanded = State.sidebarExpanded.has(room.id);
+    const isCurrentRoom = State.currentRoom && State.currentRoom.id === room.id;
+    const toggleChar = isExpanded ? '▾' : '▸';
+
+    // Overdue badge
+    const badge = room.room_task_overdue > 0
+      ? `<span class="tree-room-badge overdue">${room.room_task_overdue}</span>` : '';
+
+    // Children (room tasks + equipment)
+    let children = '';
+    if (isExpanded) {
+      const isOnRoomTasks = State.view === 'room-tasks' && isCurrentRoom;
+      const isOnEquipment = State.view === 'equipment' && isCurrentRoom;
+
+      children += `
+        <a class="tree-child-link room-tasks ${isOnRoomTasks ? 'active' : ''}"
+           onclick="enterRoomTasksFromTree(${J(room)})">
+          🧹 Room Tasks
+          ${room.room_task_count > 0 ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-left:auto">${room.room_task_count}</span>` : ''}
+        </a>
+        <a class="tree-child-link ${isOnEquipment && !State.currentEquipment ? 'active' : ''}"
+           onclick="enterRoomFromTree(${J(room)})">
+          📦 Equipment
+          ${room.equipment_count > 0 ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-left:auto">${room.equipment_count}</span>` : ''}
+        </a>`;
+
+      const equipList = State.sidebarEquipment[room.id];
+      if (equipList === undefined) {
+        children += `<div class="tree-loading">Loading...</div>`;
+      } else if (equipList.length > 0) {
+        children += equipList.map(eq => {
+          const isActiveEquip = State.currentEquipment && State.currentEquipment.id === eq.id;
+          const dot = eq.overdue_count > 0
+            ? `<span class="tree-equip-dot" style="background:var(--danger)"></span>`
+            : `<span class="tree-equip-dot"></span>`;
+          return `<a class="tree-equip-link ${isActiveEquip ? 'active' : ''}"
+              onclick="enterEquipmentFromTree(${J(room)}, ${J(eq)})">
+              ${dot}${esc(eq.name)}
+            </a>`;
+        }).join('');
+      }
+    }
+
+    return `
+      <div>
+        <div class="tree-room">
+          <button class="tree-room-toggle" onclick="toggleSidebarRoom(${room.id})">${toggleChar}</button>
+          <div class="tree-room-name ${isCurrentRoom ? 'active' : ''}"
+               onclick="enterRoomFromTree(${J(room)})">${esc(room.name)}</div>
+          ${badge}
+        </div>
+        <div class="tree-children ${isExpanded ? 'open' : ''}">${children}</div>
+      </div>`;
+  }).join('');
+
+  container.innerHTML = homeLabel + roomItems;
+}
+
+// Sidebar tree navigation helpers
+function enterRoomFromTree(room) {
+  State.currentRoom = room;
+  State.currentEquipment = null;
+  // Auto-expand in sidebar
+  if (!State.sidebarExpanded.has(room.id)) {
+    State.sidebarExpanded.add(room.id);
+    if (!State.sidebarEquipment[room.id]) loadSidebarEquipment(room.id);
+  }
+  navigate('equipment');
+}
+
+function enterRoomTasksFromTree(room) {
+  State.currentRoom = room;
+  if (!State.sidebarExpanded.has(room.id)) {
+    State.sidebarExpanded.add(room.id);
+    if (!State.sidebarEquipment[room.id]) loadSidebarEquipment(room.id);
+  }
+  navigate('room-tasks');
+}
+
+function enterEquipmentFromTree(room, equip) {
+  State.currentRoom = room;
+  State.currentEquipment = equip;
+  navigate('tasks');
+}
+
 // ── Auth ─────────────────────────────────────────────────────
 function showAuthTab(tab) {
   document.getElementById('form-login').style.display    = tab === 'login' ? '' : 'none';
@@ -123,21 +259,16 @@ function showAuthTab(tab) {
   document.getElementById('auth-error').style.display = 'none';
 }
 
-function showAuthError(msg) {
-  const el = document.getElementById('auth-error');
-  el.textContent = msg; el.style.display = '';
-}
-
 async function doLogin() {
   document.getElementById('auth-error').style.display = 'none';
   const username = document.getElementById('login-username').value.trim();
   const password = document.getElementById('login-password').value;
-  if (!username || !password) return showAuthError('Please enter username and password.');
+  if (!username || !password) { document.getElementById('auth-error').textContent = 'Please enter username and password.'; document.getElementById('auth-error').style.display = ''; return; }
   try {
     const data = await API.login({ username, password });
     API.setToken(data.token); API.setUser(data.user);
     bootApp(data.user);
-  } catch (err) { showAuthError(err.message); }
+  } catch (err) { document.getElementById('auth-error').textContent = err.message; document.getElementById('auth-error').style.display = ''; }
 }
 
 async function doRegister() {
@@ -145,17 +276,18 @@ async function doRegister() {
   const username = document.getElementById('reg-username').value.trim();
   const email    = document.getElementById('reg-email').value.trim();
   const password = document.getElementById('reg-password').value;
-  if (!username || !password) return showAuthError('Username and password are required.');
+  if (!username || !password) { document.getElementById('auth-error').textContent = 'Username and password required.'; document.getElementById('auth-error').style.display = ''; return; }
   try {
     const data = await API.register({ username, email, password });
     API.setToken(data.token); API.setUser(data.user);
     bootApp(data.user);
-  } catch (err) { showAuthError(err.message); }
+  } catch (err) { document.getElementById('auth-error').textContent = err.message; document.getElementById('auth-error').style.display = ''; }
 }
 
 function doLogout() {
   API.clearToken();
-  Object.assign(State, { user:null, currentHome:null, currentRoom:null, currentEquipment:null });
+  Object.assign(State, { user:null, currentHome:null, currentRoom:null, currentEquipment:null,
+    sidebarRooms:[], sidebarEquipment:{}, sidebarExpanded: new Set() });
   document.getElementById('app').style.display = 'none';
   document.getElementById('auth-view').style.display = '';
 }
@@ -168,40 +300,32 @@ function bootApp(user) {
   document.getElementById('user-name-display').textContent = user.username;
   document.getElementById('user-role-display').textContent = user.role;
   document.getElementById('user-avatar').textContent = user.username.charAt(0).toUpperCase();
-  // Pre-load presets for dropdown
   API.getPresets().then(p => { State.presets = p; }).catch(() => {});
+  API.getRoomPresets().then(p => { State.roomPresets = p; }).catch(() => {});
   navigate('dashboard');
 }
 
 // ── Navigation ───────────────────────────────────────────────
 function setActiveNav(id) {
-  ['nav-dashboard','nav-homes','nav-rooms','nav-room-tasks','nav-equipment','nav-tasks'].forEach(n => {
-    const el = document.getElementById(n);
-    if (el) el.classList.toggle('active', n === id);
+  document.querySelectorAll('.nav-link').forEach(el => {
+    el.classList.toggle('active', el.id === id);
   });
 }
 
 function navigate(view, params = {}) {
   State.view = view;
-  if (params.home)      State.currentHome      = params.home;
+  if (params.home)      { State.currentHome = params.home; State.sidebarRooms = []; State.sidebarEquipment = {}; State.sidebarExpanded = new Set(); }
   if (params.room)      State.currentRoom      = params.room;
   if (params.equipment) State.currentEquipment = params.equipment;
-  if (params.taskContext) State.taskContext = params.taskContext;
 
   setContent('<div class="loading-center"><div class="spinner"></div></div>');
   setTopbarActions('');
 
-  // Update context nav visibility
-  const hasHome  = !!State.currentHome;
-  const hasRoom  = !!State.currentRoom;
-  const hasEquip = !!State.currentEquipment;
-  document.getElementById('context-nav').style.display = hasHome ? '' : 'none';
-  if (document.getElementById('nav-room-tasks'))
-    document.getElementById('nav-room-tasks').style.display = hasRoom ? '' : 'none';
-  if (document.getElementById('nav-equipment'))
-    document.getElementById('nav-equipment').style.display  = hasRoom ? '' : 'none';
-  if (document.getElementById('nav-tasks'))
-    document.getElementById('nav-tasks').style.display      = hasEquip ? '' : 'none';
+  // Sidebar tree visibility
+  const treeContainer = document.getElementById('sidebar-tree-section');
+  if (treeContainer) treeContainer.style.display = State.currentHome ? '' : 'none';
+
+  renderSidebarTree();
 
   switch (view) {
     case 'dashboard':  return renderDashboard();
@@ -210,6 +334,7 @@ function navigate(view, params = {}) {
     case 'equipment':  return renderEquipment();
     case 'tasks':      return renderTasks();
     case 'room-tasks': return renderRoomTasks();
+    case 'all-tasks':  return renderAllTasks();
   }
 }
 
@@ -225,7 +350,7 @@ async function renderDashboard() {
     function overdueRow(t) {
       const isUsage = t.trigger_type === 'usage';
       const dueLabel = isUsage
-        ? `${((t.current_usage||0) - (t.next_due_usage||0)).toLocaleString()} ${t.usage_unit||'units'} over`
+        ? `${((t.current_usage||0)-(t.next_due_usage||0)).toLocaleString()} ${t.usage_unit||'units'} over`
         : dueDateLabel(t);
       const loc = t.equipment_name
         ? `${esc(t.home_name)} › ${esc(t.room_name)} › ${esc(t.equipment_name)}`
@@ -268,8 +393,8 @@ async function renderDashboard() {
       : recentActivity.map(a => {
           const usageNote = a.usage_value ? ` @ ${Number(a.usage_value).toLocaleString()} ${a.usage_unit||''}` : '';
           return `<div class="history-row">
-            <span class="history-who">${esc(a.completed_by_name || '?')}</span>
-            <span style="flex:1">${esc(a.task_name)}${usageNote ? `<span style="color:var(--cyan)">${esc(usageNote)}</span>` : ''} <span style="color:var(--text-muted)">—</span> ${esc(a.equipment_name || a.room_name)}</span>
+            <span class="history-who">${esc(a.completed_by_name||'?')}</span>
+            <span style="flex:1">${esc(a.task_name)}${usageNote ? `<span style="color:var(--cyan)">${esc(usageNote)}</span>` : ''} <span style="color:var(--text-muted)">—</span> ${esc(a.equipment_name||a.room_name)}</span>
             <span class="history-time">${timeAgo(a.completed_at)}</span>
           </div>`;
         }).join('');
@@ -306,7 +431,6 @@ async function renderDashboard() {
 
 async function quickComplete(taskId, isUsage) {
   if (isUsage) {
-    // Usage tasks need a reading — show a small prompt
     const val = prompt('Enter current reading (e.g. mileage):');
     if (val === null) return;
     const num = parseInt(val);
@@ -324,7 +448,6 @@ async function renderHomes() {
   setActiveNav('nav-homes');
   setBreadcrumb([{ label: 'Homes' }]);
   setTopbarActions(`<button class="btn btn-primary" onclick="showAddHome()">+ Add Home</button>`);
-  document.getElementById('context-nav').style.display = 'none';
 
   try {
     const homes = await API.getHomes();
@@ -353,7 +476,13 @@ async function renderHomes() {
 }
 
 function enterHome(home) {
-  State.currentHome = home; State.currentRoom = null; State.currentEquipment = null;
+  State.currentHome = home;
+  State.currentRoom = null;
+  State.currentEquipment = null;
+  State.sidebarRooms = [];
+  State.sidebarEquipment = {};
+  State.sidebarExpanded = new Set();
+  loadSidebarRooms(home.id);
   navigate('rooms');
 }
 
@@ -362,7 +491,7 @@ function showAddHome() {
     `<div class="form-group"><label>Home Name *</label><input id="f-home-name" placeholder="e.g. Main Residence"></div>
      <div class="form-group"><label>Address</label><input id="f-home-addr" placeholder="123 Main St"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitAddHome()">Add Home</button>`);
+     <button class="btn btn-primary" id="submit-task-btn" onclick="submitAddHome()">Add Home</button>`);
 }
 
 function showEditHome(home) {
@@ -370,19 +499,17 @@ function showEditHome(home) {
     `<div class="form-group"><label>Home Name *</label><input id="f-home-name" value="${esc(home.name)}"></div>
      <div class="form-group"><label>Address</label><input id="f-home-addr" value="${esc(home.address||'')}"></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitEditHome(${home.id})">Save</button>`);
+     <button class="btn btn-primary" id="submit-task-btn" onclick="submitEditHome(${home.id})">Save</button>`);
 }
 
 async function submitAddHome() {
-  const name = document.getElementById('f-home-name').value.trim();
-  if (!name) return;
+  const name = document.getElementById('f-home-name').value.trim(); if (!name) return;
   try { await API.createHome({ name, address: document.getElementById('f-home-addr').value.trim() }); closeModal(); toast('Home added!'); renderHomes(); }
   catch (err) { toast(err.message, 'error'); }
 }
 
 async function submitEditHome(id) {
-  const name = document.getElementById('f-home-name').value.trim();
-  if (!name) return;
+  const name = document.getElementById('f-home-name').value.trim(); if (!name) return;
   try { await API.updateHome(id, { name, address: document.getElementById('f-home-addr').value.trim() }); closeModal(); toast('Home updated!'); renderHomes(); }
   catch (err) { toast(err.message, 'error'); }
 }
@@ -405,6 +532,9 @@ async function renderRooms() {
 
   try {
     const rooms = await API.getRooms(State.currentHome.id);
+    State.sidebarRooms = rooms;
+    renderSidebarTree();
+
     if (!rooms.length) {
       setContent(`<div class="page-header"><div><div class="page-title">ROOMS</div>
         <div class="page-subtitle">${esc(State.currentHome.name)}</div></div></div>
@@ -413,49 +543,103 @@ async function renderRooms() {
         <button class="btn btn-primary" onclick="showAddRoom()">+ Add Room</button></div>`);
       return;
     }
+
     setContent(`
       <div class="page-header"><div><div class="page-title">ROOMS</div>
         <div class="page-subtitle">${esc(State.currentHome.name)}</div></div></div>
       <div class="item-grid">
         ${rooms.map(r => {
           const badges = [];
-          if (r.room_task_overdue > 0) badges.push(`<span class="badge badge-overdue">${r.room_task_overdue} task overdue</span>`);
+          if (r.room_task_overdue > 0) badges.push(`<span class="badge badge-overdue">${r.room_task_overdue} overdue</span>`);
           else if (r.room_task_count > 0) badges.push(`<span class="badge badge-ok">${r.room_task_count} room task${r.room_task_count!==1?'s':''}</span>`);
           badges.push(`<span class="badge badge-neutral">${r.equipment_count} item${r.equipment_count!==1?'s':''}</span>`);
           return `
-          <div class="item-card" onclick="enterRoom(${J(r)})">
+          <div class="item-card">
             <div class="item-card-actions">
-              <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoom(${J(r)})">Edit</button>
-              <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteRoom(${r.id})">✕</button>
+              <button class="btn btn-ghost btn-sm" onclick="showEditRoom(${J(r)})">Edit</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteRoom(${r.id})">✕</button>
             </div>
-            <div class="item-card-name">${esc(r.name)}</div>
+            <div class="item-card-name" onclick="enterRoomFromTree(${J(r)})" style="cursor:pointer">${esc(r.name)}</div>
             ${r.description ? `<div class="item-card-meta">${esc(r.description)}</div>` : ''}
             <div class="item-card-badges">${badges.join('')}</div>
-            <div style="margin-top:10px;display:flex;gap:8px">
-              <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();enterRoomTasks(${J(r)})">Room Tasks</button>
-              <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();enterRoom(${J(r)})">Equipment →</button>
+            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-secondary btn-sm" onclick="enterRoomTasksFromTree(${J(r)})">🧹 Room Tasks</button>
+              <button class="btn btn-secondary btn-sm" onclick="navigateAllTasks(${J(r)})">📋 All Tasks</button>
+              <button class="btn btn-ghost btn-sm" onclick="enterRoomFromTree(${J(r)})">📦 Equipment →</button>
             </div>
           </div>`; }).join('')}
       </div>`);
   } catch (err) { setContent(`<div class="alert alert-error">${err.message}</div>`); }
 }
 
-function enterRoom(room) {
-  State.currentRoom = room; State.currentEquipment = null;
-  navigate('equipment');
-}
-
-function enterRoomTasks(room) {
+function navigateAllTasks(room) {
   State.currentRoom = room;
-  navigate('room-tasks');
+  State.sidebarExpanded.add(room.id);
+  if (!State.sidebarEquipment[room.id]) loadSidebarEquipment(room.id);
+  navigate('all-tasks');
 }
 
 function showAddRoom() {
+  const presetOpts = State.roomPresets.map(p =>
+    `<option value="${esc(p.name)}">${esc(p.icon)} ${esc(p.name)}</option>`
+  ).join('');
+
   showModal('ADD ROOM',
-    `<div class="form-group"><label>Room Name *</label><input id="f-room-name" placeholder="e.g. Kitchen, Garage, Master Bath"></div>
+    `<div class="form-group">
+       <label>Room Type (optional)</label>
+       <select id="f-room-preset" onchange="onRoomPresetChange()">
+         <option value="">— Select a type to auto-fill —</option>
+         ${presetOpts}
+       </select>
+       <div class="room-preset-summary" id="room-preset-summary"></div>
+     </div>
+     <div class="form-group"><label>Room Name *</label><input id="f-room-name" placeholder="e.g. Kitchen, Garage, Master Bath"></div>
      <div class="form-group"><label>Description</label><textarea id="f-room-desc" placeholder="Optional notes"></textarea></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitAddRoom()">Add Room</button>`);
+     <button class="btn btn-primary" id="submit-task-btn" onclick="submitAddRoom()">Add Room</button>`);
+}
+
+function onRoomPresetChange() {
+  const val = document.getElementById('f-room-preset').value;
+  const summary = document.getElementById('room-preset-summary');
+  if (!val) { summary.classList.remove('visible'); summary.innerHTML = ''; return; }
+
+  const preset = State.roomPresets.find(p => p.name === val);
+  if (!preset) return;
+
+  // Auto-fill name if empty
+  const nameField = document.getElementById('f-room-name');
+  if (!nameField.value.trim()) nameField.value = val;
+
+  // Show summary
+  const taskItems = preset.room_task_count > 0
+    ? `<div class="room-preset-col">
+        <div class="room-preset-col-title">🧹 Room Tasks (${preset.room_task_count})</div>
+        <div class="room-preset-item muted">Cleaning &amp; inspection tasks</div>
+       </div>` : '';
+  const equipItems = preset.equipment_count > 0
+    ? `<div class="room-preset-col">
+        <div class="room-preset-col-title">📦 Default Equipment (${preset.equipment_count})</div>
+        <div class="room-preset-item muted">Loading...</div>
+       </div>` : '';
+
+  summary.classList.add('visible');
+  summary.innerHTML = taskItems + equipItems;
+
+  // Load full preset to show equipment names
+  API.getRoomPreset(val).then(full => {
+    const equipList = full.defaultEquipment.map(e =>
+      `<div class="room-preset-item">${esc(e.name)}${e.tasks.length ? ` <span style="color:var(--text-muted);font-size:10px">(${e.tasks.length} tasks)</span>` : ''}</div>`
+    ).join('');
+    const taskList = full.roomTasks.map(t =>
+      `<div class="room-preset-item">${esc(t.name)}</div>`
+    ).join('');
+    summary.innerHTML = `
+      ${taskList ? `<div class="room-preset-col"><div class="room-preset-col-title">🧹 Room Tasks</div>${taskList}</div>` : ''}
+      ${equipList ? `<div class="room-preset-col"><div class="room-preset-col-title">📦 Equipment</div>${equipList}</div>` : ''}`;
+    window._roomPresetCache = window._roomPresetCache || {};
+    window._roomPresetCache[val] = full;
+  }).catch(() => {});
 }
 
 function showEditRoom(room) {
@@ -463,31 +647,86 @@ function showEditRoom(room) {
     `<div class="form-group"><label>Room Name *</label><input id="f-room-name" value="${esc(room.name)}"></div>
      <div class="form-group"><label>Description</label><textarea id="f-room-desc">${esc(room.description||'')}</textarea></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitEditRoom(${room.id})">Save</button>`);
+     <button class="btn btn-primary" id="submit-task-btn" onclick="submitEditRoom(${room.id})">Save</button>`);
 }
 
 async function submitAddRoom() {
   const name = document.getElementById('f-room-name').value.trim(); if (!name) return;
-  try { await API.createRoom({ home_id: State.currentHome.id, name, description: document.getElementById('f-room-desc').value.trim() }); closeModal(); toast('Room added!'); renderRooms(); }
-  catch (err) { toast(err.message, 'error'); }
+  const presetName = document.getElementById('f-room-preset')?.value || '';
+  try {
+    const room = await API.createRoom({
+      home_id: State.currentHome.id,
+      name,
+      description: document.getElementById('f-room-desc').value.trim()
+    });
+
+    if (presetName) {
+      try {
+        // Use cached preset if available, otherwise fetch
+        const full = window._roomPresetCache?.[presetName] || await API.getRoomPreset(presetName);
+
+        // Create room-level tasks
+        for (const t of full.roomTasks) {
+          await API.createTask({ room_id: room.id, name: t.name, description: t.description,
+            trigger_type: 'time', frequency_value: t.frequency_value, frequency_unit: t.frequency_unit });
+        }
+
+        // Create equipment + their tasks
+        for (const eq of full.defaultEquipment) {
+          const newEq = await API.createEquipment({
+            room_id: room.id, name: eq.name, description: eq.description || '',
+            preset_type: eq.preset_type || null,
+            usage_unit: eq.usage_unit || null,
+            current_usage: eq.usage_unit ? 0 : undefined,
+          });
+          for (const t of (eq.tasks || [])) {
+            await API.createTask({ equipment_id: newEq.id, ...t });
+          }
+        }
+
+        const totalTasks = full.roomTasks.length + full.defaultEquipment.reduce((s, e) => s + (e.tasks?.length || 0), 0);
+        toast(`Room added with ${full.defaultEquipment.length} equipment and ${totalTasks} tasks!`);
+      } catch (e) {
+        toast('Room added (preset setup failed: ' + e.message + ')', 'error');
+      }
+    } else {
+      toast('Room added!');
+    }
+
+    closeModal();
+    const rooms = await API.getRooms(State.currentHome.id);
+    State.sidebarRooms = rooms;
+    renderRooms();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 async function submitEditRoom(id) {
   const name = document.getElementById('f-room-name').value.trim(); if (!name) return;
-  try { await API.updateRoom(id, { name, description: document.getElementById('f-room-desc').value.trim() }); closeModal(); toast('Room updated!'); renderRooms(); }
-  catch (err) { toast(err.message, 'error'); }
+  try {
+    await API.updateRoom(id, { name, description: document.getElementById('f-room-desc').value.trim() });
+    closeModal(); toast('Room updated!');
+    const rooms = await API.getRooms(State.currentHome.id);
+    State.sidebarRooms = rooms;
+    renderRooms();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 async function deleteRoom(id) {
   if (!confirm('Delete this room and all its equipment and tasks?')) return;
-  try { await API.deleteRoom(id); toast('Room deleted.'); renderRooms(); }
-  catch (err) { toast(err.message, 'error'); }
+  try {
+    await API.deleteRoom(id); toast('Room deleted.');
+    const rooms = await API.getRooms(State.currentHome.id);
+    State.sidebarRooms = rooms;
+    delete State.sidebarEquipment[id];
+    State.sidebarExpanded.delete(id);
+    renderRooms();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 // ── EQUIPMENT ────────────────────────────────────────────────
 async function renderEquipment() {
   if (!State.currentRoom) return navigate('rooms');
-  setActiveNav('nav-equipment');
+  setActiveNav('');
   setBreadcrumb([
     { label: 'Homes', onclick: "navigate('homes')" },
     { label: State.currentHome.name, onclick: "navigate('rooms')" },
@@ -497,14 +736,18 @@ async function renderEquipment() {
 
   try {
     const items = await API.getEquipment(State.currentRoom.id);
+    State.sidebarEquipment[State.currentRoom.id] = items;
+    renderSidebarTree();
+
     if (!items.length) {
       setContent(`<div class="page-header"><div><div class="page-title">EQUIPMENT</div>
         <div class="page-subtitle">${esc(State.currentRoom.name)}</div></div></div>
         <div class="empty-state"><div class="empty-icon">📦</div><div class="empty-title">No equipment yet</div>
-        <div class="empty-msg">Add appliances, systems, or vehicles that need maintenance.</div><br>
+        <div class="empty-msg">Add appliances, systems, or vehicles.</div><br>
         <button class="btn btn-primary" onclick="showAddEquipment()">+ Add Equipment</button></div>`);
       return;
     }
+
     setContent(`
       <div class="page-header"><div><div class="page-title">EQUIPMENT</div>
         <div class="page-subtitle">${esc(State.currentHome.name)} › ${esc(State.currentRoom.name)}</div></div></div>
@@ -516,16 +759,12 @@ async function renderEquipment() {
           if (e.overdue_count===0 && e.due_soon_count===0 && e.task_count>0) badges.push(`<span class="badge badge-ok">All clear</span>`);
           badges.push(`<span class="badge badge-neutral">${e.task_count} task${e.task_count!==1?'s':''}</span>`);
           if (e.preset_type) badges.push(`<span class="badge badge-cyan">${esc(e.preset_type)}</span>`);
-
           const sub = [e.make, e.model].filter(Boolean).join(' ');
           const usageBar = e.current_usage !== null && e.current_usage !== undefined ? `
-            <div class="usage-bar-wrap">
-              <div class="usage-bar-label">
-                <span>${Number(e.current_usage).toLocaleString()} ${esc(e.usage_unit||'')}</span>
-                <button class="btn btn-cyan btn-xs" onclick="event.stopPropagation();showUpdateUsage(${J(e)})">Update</button>
-              </div>
-            </div>` : '';
-
+            <div class="usage-bar-wrap"><div class="usage-bar-label">
+              <span>${Number(e.current_usage).toLocaleString()} ${esc(e.usage_unit||'')}</span>
+              <button class="btn btn-cyan btn-xs" onclick="event.stopPropagation();showUpdateUsage(${J(e)})">Update</button>
+            </div></div>` : '';
           return `
           <div class="item-card" onclick="enterEquipment(${J(e)})">
             <div class="item-card-actions">
@@ -545,13 +784,15 @@ async function renderEquipment() {
 
 function enterEquipment(equip) {
   State.currentEquipment = equip;
+  State.sidebarExpanded.add(State.currentRoom.id);
+  renderSidebarTree();
   navigate('tasks');
 }
 
-// Build preset dropdown HTML
+// Preset dropdown helpers
 function presetDropdownHtml() {
   const opts = State.presets.map(p =>
-    `<option value="${esc(p.name)}">${esc(p.icon)} ${esc(p.name)} (${p.task_count} default tasks)</option>`
+    `<option value="${esc(p.name)}">${esc(p.icon)} ${esc(p.name)} (${p.task_count} tasks)</option>`
   ).join('');
   return `
     <div class="form-group">
@@ -571,10 +812,12 @@ function onPresetChange() {
   const preset = State.presets.find(p => p.name === val);
   if (!preset) return;
   hint.classList.add('visible');
-  hint.innerHTML = `<strong>${preset.task_count} tasks</strong> will be created automatically.${preset.usage_unit ? ` Usage tracking in <strong>${preset.usage_unit}</strong> will be enabled.` : ''}`;
-  // Auto-fill the name field if empty
+  hint.innerHTML = `<strong>${preset.task_count} tasks</strong> will be created.${preset.usage_unit ? ` Usage tracking in <strong>${preset.usage_unit}</strong> enabled.` : ''}`;
   const nameField = document.getElementById('f-eq-name');
   if (!nameField.value.trim()) nameField.value = val;
+  // Show/hide usage field
+  const usageWrap = document.getElementById('f-usage-wrap');
+  if (usageWrap) usageWrap.style.display = preset.usage_unit ? '' : 'none';
 }
 
 function showAddEquipment() {
@@ -584,7 +827,7 @@ function showAddEquipment() {
      <div class="form-group"><label>Description</label><input id="f-eq-desc" placeholder="Brief description"></div>
      <div class="form-row">
        <div class="form-group"><label>Make / Brand</label><input id="f-eq-make" placeholder="e.g. Carrier"></div>
-       <div class="form-group"><label>Model</label><input id="f-eq-model" placeholder="e.g. Accord"></div>
+       <div class="form-group"><label>Model</label><input id="f-eq-model" placeholder="e.g. 24ACC636"></div>
      </div>
      <div class="form-row">
        <div class="form-group"><label>Serial / VIN</label><input id="f-eq-serial" placeholder="Optional"></div>
@@ -595,11 +838,11 @@ function showAddEquipment() {
      </div>
      <div class="form-group"><label>Notes</label><textarea id="f-eq-notes" placeholder="Warranty info, purchase date, etc."></textarea></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitAddEquipment()">Add Equipment</button>`);
+     <button class="btn btn-primary" id="submit-task-btn" onclick="submitAddEquipment()">Add Equipment</button>`);
 }
 
 function showEditEquipment(e) {
-  const usageVisible = e.current_usage !== null && e.current_usage !== undefined ? '' : 'display:none';
+  const usageVis = (e.current_usage !== null && e.current_usage !== undefined) ? '' : 'display:none';
   showModal('EDIT EQUIPMENT',
     `<div class="form-group"><label>Name *</label><input id="f-eq-name" value="${esc(e.name)}"></div>
      <div class="form-group"><label>Description</label><input id="f-eq-desc" value="${esc(e.description||'')}"></div>
@@ -609,14 +852,14 @@ function showEditEquipment(e) {
      </div>
      <div class="form-row">
        <div class="form-group"><label>Serial / VIN</label><input id="f-eq-serial" value="${esc(e.serial_number||'')}"></div>
-       <div class="form-group" id="f-usage-wrap" style="${usageVisible}">
+       <div class="form-group" id="f-usage-wrap" style="${usageVis}">
          <label>Current Reading (${esc(e.usage_unit||'units')})</label>
          <input type="number" id="f-eq-usage" value="${e.current_usage !== null ? e.current_usage : ''}">
        </div>
      </div>
      <div class="form-group"><label>Notes</label><textarea id="f-eq-notes">${esc(e.notes||'')}</textarea></div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitEditEquipment(${e.id}, '${esc(e.usage_unit||'')}')">Save</button>`);
+     <button class="btn btn-primary" id="submit-task-btn" onclick="submitEditEquipment(${e.id}, '${esc(e.usage_unit||'')}')">Save</button>`);
 }
 
 function showUpdateUsage(e) {
@@ -624,10 +867,10 @@ function showUpdateUsage(e) {
     `<div class="form-group">
        <label>Current ${esc(e.usage_unit||'Reading')}</label>
        <input type="number" id="f-usage-val" value="${e.current_usage||0}" min="0">
-       <div class="field-hint">Current stored value: ${Number(e.current_usage||0).toLocaleString()} ${esc(e.usage_unit||'')}</div>
+       <div class="field-hint">Stored: ${Number(e.current_usage||0).toLocaleString()} ${esc(e.usage_unit||'')}</div>
      </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" onclick="submitUpdateUsage(${e.id})">Save</button>`);
+     <button class="btn btn-primary" id="submit-task-btn" onclick="submitUpdateUsage(${e.id})">Save</button>`);
 }
 
 async function submitUpdateUsage(id) {
@@ -635,12 +878,19 @@ async function submitUpdateUsage(id) {
   if (isNaN(val)) return;
   try {
     await API.updateUsage(id, val);
-    closeModal(); toast('Reading updated!'); renderEquipment();
+    // Update cached equipment in sidebar
+    for (const roomId in State.sidebarEquipment) {
+      State.sidebarEquipment[roomId] = State.sidebarEquipment[roomId].map(e => e.id === id ? { ...e, current_usage: val } : e);
+    }
+    if (State.currentEquipment && State.currentEquipment.id === id) State.currentEquipment.current_usage = val;
+    closeModal(); toast('Reading updated!');
+    State.view === 'tasks' ? renderTasks() : renderEquipment();
   } catch (err) { toast(err.message, 'error'); }
 }
 
 function getEquipmentForm(usageUnit) {
   const presetEl = document.getElementById('f-eq-preset');
+  const usageEl  = document.getElementById('f-eq-usage');
   return {
     name:          document.getElementById('f-eq-name').value.trim(),
     description:   document.getElementById('f-eq-desc').value.trim(),
@@ -649,7 +899,7 @@ function getEquipmentForm(usageUnit) {
     serial_number: document.getElementById('f-eq-serial').value.trim(),
     notes:         document.getElementById('f-eq-notes').value.trim(),
     preset_type:   presetEl ? presetEl.value : undefined,
-    current_usage: (() => { const v = document.getElementById('f-eq-usage'); return (v && v.value !== '') ? parseInt(v.value) : undefined; })(),
+    current_usage: (usageEl && usageEl.value !== '') ? parseInt(usageEl.value) : undefined,
     usage_unit:    usageUnit || undefined,
   };
 }
@@ -657,71 +907,125 @@ function getEquipmentForm(usageUnit) {
 async function submitAddEquipment() {
   const presetName = document.getElementById('f-eq-preset')?.value;
   let usageUnit = null;
-
-  // If a preset was selected, get its usage_unit
   if (presetName) {
     const preset = State.presets.find(p => p.name === presetName);
     usageUnit = preset?.usage_unit || null;
   }
-
   const data = getEquipmentForm(usageUnit);
   if (!data.name) return;
-
   try {
     const eq = await API.createEquipment({ ...data, room_id: State.currentRoom.id });
-
-    // Auto-create default tasks if preset selected
     if (presetName) {
       try {
         const full = await API.getPreset(presetName);
-        for (const task of full.tasks) {
-          await API.createTask({ ...task, equipment_id: eq.id });
-        }
+        for (const task of full.tasks) await API.createTask({ ...task, equipment_id: eq.id });
         toast(`Equipment added with ${full.tasks.length} default tasks!`);
-      } catch {
-        toast('Equipment added (could not load preset tasks).', 'error');
-      }
+      } catch { toast('Equipment added (preset tasks failed).', 'error'); }
     } else {
       toast('Equipment added!');
     }
-
-    closeModal(); renderEquipment();
+    closeModal();
+    const items = await API.getEquipment(State.currentRoom.id);
+    State.sidebarEquipment[State.currentRoom.id] = items;
+    renderEquipment();
   } catch (err) { toast(err.message, 'error'); }
 }
 
 async function submitEditEquipment(id, usageUnit) {
   const data = getEquipmentForm(usageUnit);
   if (!data.name) return;
-  try { await API.updateEquipment(id, data); closeModal(); toast('Equipment updated!'); renderEquipment(); }
-  catch (err) { toast(err.message, 'error'); }
+  try {
+    await API.updateEquipment(id, data); closeModal(); toast('Equipment updated!');
+    const items = await API.getEquipment(State.currentRoom.id);
+    State.sidebarEquipment[State.currentRoom.id] = items;
+    renderEquipment();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 async function deleteEquipment(id) {
   if (!confirm('Delete this equipment and all its tasks?')) return;
-  try { await API.deleteEquipment(id); toast('Equipment deleted.'); renderEquipment(); }
-  catch (err) { toast(err.message, 'error'); }
+  try {
+    await API.deleteEquipment(id); toast('Equipment deleted.');
+    const items = await API.getEquipment(State.currentRoom.id);
+    State.sidebarEquipment[State.currentRoom.id] = items;
+    renderEquipment();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
-// ── TASK FORM HELPERS ────────────────────────────────────────
-function taskFormHtml(t = {}) {
+// ── TASK FORM ────────────────────────────────────────────────
+function presetTaskPickerHtml(equipmentPresetType) {
+  if (!equipmentPresetType) return '';
+  const preset = State.presets.find(p => p.name === equipmentPresetType);
+  if (!preset) return '';
+  // We need the full preset tasks — fetch async and inject, but for now show a select
+  return `<div id="preset-task-picker-wrap">
+    <div class="preset-task-picker">
+      <div class="preset-task-picker-header">⚡ Quick-fill from ${esc(equipmentPresetType)} templates</div>
+      <div class="preset-task-list" id="preset-task-list">
+        <div style="padding:8px 10px;font-size:12px;color:var(--text-muted)">Loading templates...</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadPresetTaskList(presetName) {
+  const container = document.getElementById('preset-task-list');
+  if (!container) return;
+  try {
+    const full = await API.getPreset(presetName);
+    container.innerHTML = full.tasks.map((t, i) => `
+      <div class="preset-task-item" onclick="fillTaskFromPreset(${i}, '${esc(presetName)}')">
+        <div>${esc(t.name)}</div>
+        <div class="preset-task-item-meta">
+          ${t.trigger_type === 'usage'
+            ? `Every ${Number(t.usage_interval).toLocaleString()} ${t.usage_unit}`
+            : `Every ${t.frequency_value} ${t.frequency_unit}(s)`}
+        </div>
+      </div>`).join('');
+    // Store for later use
+    window._presetTasksCache = window._presetTasksCache || {};
+    window._presetTasksCache[presetName] = full.tasks;
+  } catch {
+    container.innerHTML = '<div style="padding:8px 10px;font-size:12px;color:var(--text-muted)">Could not load templates.</div>';
+  }
+}
+
+function fillTaskFromPreset(index, presetName) {
+  const tasks = window._presetTasksCache?.[presetName];
+  if (!tasks || !tasks[index]) return;
+  const t = tasks[index];
+  // Fill form fields
+  document.getElementById('f-task-name').value = t.name || '';
+  document.getElementById('f-task-desc').value = t.description || '';
+  setTriggerType(t.trigger_type || 'time');
+  if (t.trigger_type === 'usage') {
+    const ui = document.getElementById('f-task-uinterval'); if (ui) ui.value = t.usage_interval || '';
+    const uu = document.getElementById('f-task-uunit');     if (uu) uu.value = t.usage_unit || '';
+  } else {
+    const fv = document.getElementById('f-task-fval');  if (fv) fv.value = t.frequency_value || 1;
+    const fu = document.getElementById('f-task-funit'); if (fu) fu.value = t.frequency_unit || 'month';
+  }
+  toast('Template loaded — review and save');
+}
+
+function taskFormHtml(t = {}, presetType = null) {
   const isUsage = (t.trigger_type || 'time') === 'usage';
   const units = ['day','week','month','year'];
   const unitOpts = units.map(u => `<option value="${u}" ${(t.frequency_unit||'month')===u?'selected':''}>${u.charAt(0).toUpperCase()+u.slice(1)}(s)</option>`).join('');
 
   return `
+    ${presetTaskPickerHtml(presetType)}
     <div class="form-group">
       <label>Trigger Type</label>
       <div class="trigger-toggle">
-        <button type="button" class="trigger-btn ${!isUsage?'active':''}" id="tt-time" onclick="setTriggerType('time')">⏱ Time-Based</button>
-        <button type="button" class="trigger-btn ${isUsage?'active':''}" id="tt-usage" onclick="setTriggerType('usage')">🔢 Usage-Based</button>
+        <button type="button" class="trigger-btn ${!isUsage?'active':''}" id="tt-time"  onclick="setTriggerType('time')">⏱ Time-Based</button>
+        <button type="button" class="trigger-btn ${isUsage?'active':''}"  id="tt-usage" onclick="setTriggerType('usage')">🔢 Usage-Based</button>
       </div>
     </div>
     <div class="form-group"><label>Task Name *</label>
-      <input id="f-task-name" value="${esc(t.name||'')}" placeholder="e.g. Replace filter, Oil change, Deep clean"></div>
+      <input id="f-task-name" value="${esc(t.name||'')}" placeholder="e.g. Replace filter, Oil change"></div>
     <div class="form-group"><label>Description / Procedure</label>
-      <textarea id="f-task-desc" placeholder="Step-by-step procedure notes...">${esc(t.description||'')}</textarea></div>
-
-    <!-- Time-based fields -->
+      <textarea id="f-task-desc" placeholder="Step-by-step notes...">${esc(t.description||'')}</textarea></div>
     <div id="task-time-fields" style="${isUsage?'display:none':''}">
       <div class="form-group"><label>Repeat Every</label>
         <div class="freq-row">
@@ -730,8 +1034,6 @@ function taskFormHtml(t = {}) {
         </div>
       </div>
     </div>
-
-    <!-- Usage-based fields -->
     <div id="task-usage-fields" style="${isUsage?'':'display:none'}">
       <div class="form-row">
         <div class="form-group"><label>Every (interval)</label>
@@ -765,7 +1067,7 @@ function getTaskForm() {
 // ── EQUIPMENT TASKS ──────────────────────────────────────────
 async function renderTasks() {
   if (!State.currentEquipment) return navigate('equipment');
-  setActiveNav('nav-tasks');
+  setActiveNav('');
   const eq = State.currentEquipment;
   setBreadcrumb([
     { label: 'Homes', onclick: "navigate('homes')" },
@@ -778,7 +1080,6 @@ async function renderTasks() {
   try {
     const tasks = await API.getTasks({ equipment_id: eq.id });
     const equDetails = [eq.make, eq.model, eq.serial_number ? `S/N: ${eq.serial_number}` : ''].filter(Boolean).join(' · ');
-
     const usageSummary = eq.current_usage !== null && eq.current_usage !== undefined ? `
       <div class="alert alert-info" style="margin-bottom:20px;display:flex;align-items:center;justify-content:space-between">
         <span>Current ${esc(eq.usage_unit||'reading')}: <strong>${Number(eq.current_usage).toLocaleString()} ${esc(eq.usage_unit||'')}</strong></span>
@@ -791,7 +1092,7 @@ async function renderTasks() {
         ${usageSummary}
         ${eq.notes ? `<div class="alert alert-info" style="margin-bottom:20px">📋 ${esc(eq.notes)}</div>` : ''}
         <div class="empty-state"><div class="empty-icon">✓</div><div class="empty-title">No tasks yet</div>
-        <div class="empty-msg">Add maintenance tasks or inspections for this equipment.</div><br>
+        <div class="empty-msg">Add maintenance tasks for this equipment.</div><br>
         <button class="btn btn-primary" onclick="showAddTask('equipment')">+ Add Task</button></div>`);
       return;
     }
@@ -805,41 +1106,104 @@ async function renderTasks() {
   } catch (err) { setContent(`<div class="alert alert-error">${err.message}</div>`); }
 }
 
-// ── ROOM-LEVEL TASKS ─────────────────────────────────────────
+// ── ROOM TASKS ───────────────────────────────────────────────
 async function renderRoomTasks() {
   if (!State.currentRoom) return navigate('rooms');
-  setActiveNav('nav-room-tasks');
+  setActiveNav('');
   setBreadcrumb([
     { label: 'Homes', onclick: "navigate('homes')" },
     { label: State.currentHome.name, onclick: "navigate('rooms')" },
     { label: State.currentRoom.name, onclick: "navigate('equipment')" },
     { label: 'Room Tasks' }
   ]);
-  setTopbarActions(`<button class="btn btn-primary" onclick="showAddTask('room')">+ Add Room Task</button>`);
+  setTopbarActions(`
+    <div class="view-toggle">
+      <button class="view-toggle-btn active">Room Tasks</button>
+      <button class="view-toggle-btn" onclick="navigateAllTasks(${J(State.currentRoom)})">All Tasks</button>
+    </div>
+    <button class="btn btn-primary" onclick="showAddTask('room')">+ Add Task</button>`);
 
   try {
     const tasks = await API.getTasks({ room_id: State.currentRoom.id });
-
     if (!tasks.length) {
       setContent(`<div class="page-header"><div><div class="page-title">ROOM TASKS</div>
         <div class="page-subtitle">${esc(State.currentRoom.name)} — cleaning, inspections, etc.</div></div></div>
         <div class="empty-state"><div class="empty-icon">🧹</div><div class="empty-title">No room tasks yet</div>
-        <div class="empty-msg">Add recurring tasks for this room — cleaning, inspections, seasonal prep, etc.</div><br>
-        <button class="btn btn-primary" onclick="showAddTask('room')">+ Add Room Task</button></div>`);
+        <div class="empty-msg">Add recurring tasks — cleaning, inspections, seasonal prep.</div><br>
+        <button class="btn btn-primary" onclick="showAddTask('room')">+ Add Task</button></div>`);
       return;
     }
-
     setContent(`
       <div class="page-header"><div><div class="page-title">ROOM TASKS</div>
-        <div class="page-subtitle">${esc(State.currentRoom.name)} — cleaning, inspections, etc.</div></div></div>
+        <div class="page-subtitle">${esc(State.currentRoom.name)}</div></div></div>
       ${renderTaskSections(tasks, null)}`);
   } catch (err) { setContent(`<div class="alert alert-error">${err.message}</div>`); }
 }
 
+// ── ALL TASKS (room tasks + all equipment tasks) ─────────────
+async function renderAllTasks() {
+  if (!State.currentRoom) return navigate('rooms');
+  setActiveNav('');
+  setBreadcrumb([
+    { label: 'Homes', onclick: "navigate('homes')" },
+    { label: State.currentHome.name, onclick: "navigate('rooms')" },
+    { label: State.currentRoom.name, onclick: "navigate('equipment')" },
+    { label: 'All Tasks' }
+  ]);
+  setTopbarActions(`
+    <div class="view-toggle">
+      <button class="view-toggle-btn" onclick="enterRoomTasksFromTree(${J(State.currentRoom)})">Room Tasks</button>
+      <button class="view-toggle-btn active">All Tasks</button>
+    </div>`);
+
+  try {
+    const data = await API.getRoomAllTasks(State.currentRoom.id);
+    const { roomTasks, equipment } = data;
+
+    let html = `<div class="page-header"><div><div class="page-title">ALL TASKS</div>
+      <div class="page-subtitle">${esc(State.currentRoom.name)} — room tasks + all equipment</div></div></div>`;
+
+    // Room-level tasks section
+    if (roomTasks.length) {
+      html += `<div class="all-tasks-group">
+        <div class="all-tasks-group-header">
+          <div class="all-tasks-group-title">🧹 ${esc(State.currentRoom.name)} Room Tasks</div>
+          <div class="all-tasks-group-meta">${roomTasks.length} task${roomTasks.length!==1?'s':''}</div>
+        </div>
+        ${renderTaskSections(roomTasks, null)}
+      </div>`;
+    }
+
+    // Equipment sections
+    for (const eq of equipment) {
+      if (!eq.tasks.length) continue;
+      const overdueCount = eq.tasks.filter(t => t.status === 'overdue').length;
+      const badgeHtml = overdueCount > 0
+        ? `<span class="badge badge-overdue" style="font-size:9px">${overdueCount} overdue</span>` : '';
+      html += `<div class="all-tasks-group">
+        <div class="all-tasks-group-header" onclick="enterEquipment(${J(eq)})">
+          <div class="all-tasks-group-title">📦 ${esc(eq.name)} ${badgeHtml}</div>
+          <div class="all-tasks-group-meta">${eq.tasks.length} task${eq.tasks.length!==1?'s':''} · click to open →</div>
+        </div>
+        ${renderTaskSections(eq.tasks, eq.current_usage)}
+      </div>`;
+    }
+
+    if (!roomTasks.length && !equipment.some(e => e.tasks.length)) {
+      html += `<div class="empty-state"><div class="empty-icon">✓</div>
+        <div class="empty-title">No tasks in this room yet</div>
+        <div class="empty-msg">Add room tasks or equipment with tasks first.</div></div>`;
+    }
+
+    setContent(html);
+  } catch (err) { setContent(`<div class="alert alert-error">${err.message}</div>`); }
+}
+
+// ── SHARED TASK RENDERING ────────────────────────────────────
 function renderTaskSections(tasks, currentUsage) {
-  const overdue   = tasks.filter(t => t.status === 'overdue');
-  const dueSoon   = tasks.filter(t => t.status === 'due_soon');
-  const ok        = tasks.filter(t => t.status === 'ok');
+  const overdue  = tasks.filter(t => t.status === 'overdue');
+  const dueSoon  = tasks.filter(t => t.status === 'due_soon');
+  const ok       = tasks.filter(t => t.status === 'ok');
 
   function taskRow(t) {
     const usageNote = t.trigger_type === 'usage' && currentUsage !== null
@@ -865,56 +1229,51 @@ function renderTaskSections(tasks, currentUsage) {
   }
 
   let html = '';
-  if (overdue.length) html += `<div style="margin-bottom:24px"><div class="task-section-label overdue">⚠ Overdue</div><div class="task-list">${overdue.map(taskRow).join('')}</div></div>`;
-  if (dueSoon.length) html += `<div style="margin-bottom:24px"><div class="task-section-label due-soon">◷ Due Soon</div><div class="task-list">${dueSoon.map(taskRow).join('')}</div></div>`;
-  if (ok.length)      html += `<div style="margin-bottom:24px"><div class="task-section-label ok">✓ Up to Date</div><div class="task-list">${ok.map(taskRow).join('')}</div></div>`;
+  if (overdue.length)  html += `<div style="margin-bottom:24px"><div class="task-section-label overdue">⚠ Overdue</div><div class="task-list">${overdue.map(taskRow).join('')}</div></div>`;
+  if (dueSoon.length)  html += `<div style="margin-bottom:24px"><div class="task-section-label due-soon">◷ Due Soon</div><div class="task-list">${dueSoon.map(taskRow).join('')}</div></div>`;
+  if (ok.length)       html += `<div style="margin-bottom:24px"><div class="task-section-label ok">✓ Up to Date</div><div class="task-list">${ok.map(taskRow).join('')}</div></div>`;
   return html;
 }
 
 function showAddTask(context) {
-  // context is 'equipment' or 'room'
-  showModal('ADD TASK', taskFormHtml(),
+  const presetType = context === 'equipment' ? State.currentEquipment?.preset_type : null;
+  showModal('ADD TASK', taskFormHtml({}, presetType),
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" id="submit-task-btn" onclick="submitAddTask('${context}')">Add Task</button>`);
+  if (presetType) loadPresetTaskList(presetType);
 }
 
 function showEditTask(t) {
-  showModal('EDIT TASK', taskFormHtml(t),
+  const presetType = State.currentEquipment?.preset_type || null;
+  showModal('EDIT TASK', taskFormHtml(t, presetType),
     `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
      <button class="btn btn-primary" id="submit-task-btn" onclick="submitEditTask(${t.id})">Save</button>`);
+  if (presetType) loadPresetTaskList(presetType);
 }
 
 async function submitAddTask(context) {
-  const data = getTaskForm();
-  if (!data.name) return;
+  const data = getTaskForm(); if (!data.name) return;
   const payload = { ...data };
-  if (context === 'room') {
-    payload.room_id = State.currentRoom.id;
-  } else {
-    payload.equipment_id = State.currentEquipment.id;
-  }
+  if (context === 'room') payload.room_id = State.currentRoom.id;
+  else payload.equipment_id = State.currentEquipment.id;
   try {
-    await API.createTask(payload);
-    closeModal(); toast('Task added!');
-    context === 'room' ? renderRoomTasks() : renderTasks();
+    await API.createTask(payload); closeModal(); toast('Task added!');
+    reloadCurrentTaskView();
   } catch (err) { toast(err.message, 'error'); }
 }
 
 async function submitEditTask(id) {
-  const data = getTaskForm();
-  if (!data.name) return;
+  const data = getTaskForm(); if (!data.name) return;
   try {
-    await API.updateTask(id, data);
-    closeModal(); toast('Task updated!');
-    State.view === 'room-tasks' ? renderRoomTasks() : renderTasks();
+    await API.updateTask(id, data); closeModal(); toast('Task updated!');
+    reloadCurrentTaskView();
   } catch (err) { toast(err.message, 'error'); }
 }
 
 async function completeTaskUI(taskId, isUsage) {
   if (isUsage) {
     showModal('MARK COMPLETE',
-      `<div class="form-group">
-         <label>Current Reading *</label>
+      `<div class="form-group"><label>Current Reading *</label>
          <input type="number" id="f-complete-usage" placeholder="Enter current mileage / hours / etc.">
          <div class="field-hint">This will update the equipment's current reading.</div>
        </div>
@@ -924,8 +1283,7 @@ async function completeTaskUI(taskId, isUsage) {
        <button class="btn btn-success" id="submit-task-btn" onclick="submitComplete(${taskId}, true)">Mark Complete</button>`);
   } else {
     showModal('MARK COMPLETE',
-      `<div class="form-group">
-         <label>Completed On *</label>
+      `<div class="form-group"><label>Completed On *</label>
          <input type="datetime-local" id="f-complete-date" value="${formatDateTimeLocal(new Date().toISOString())}">
        </div>
        <div class="form-group"><label>Notes (optional)</label>
@@ -938,7 +1296,6 @@ async function completeTaskUI(taskId, isUsage) {
 async function submitComplete(taskId, isUsage) {
   const notes = document.getElementById('f-complete-notes')?.value.trim();
   const payload = { notes: notes || undefined };
-
   if (isUsage) {
     const val = parseInt(document.getElementById('f-complete-usage').value);
     if (isNaN(val)) return toast('Enter a valid reading', 'error');
@@ -947,11 +1304,9 @@ async function submitComplete(taskId, isUsage) {
     const dateVal = document.getElementById('f-complete-date').value;
     if (dateVal) payload.completed_at = new Date(dateVal).toISOString();
   }
-
   try {
-    await API.completeTask(taskId, payload);
-    closeModal(); toast('Task marked complete!');
-    State.view === 'room-tasks' ? renderRoomTasks() : renderTasks();
+    await API.completeTask(taskId, payload); closeModal(); toast('Task marked complete!');
+    reloadCurrentTaskView();
   } catch (err) { toast(err.message, 'error'); }
 }
 
@@ -959,11 +1314,17 @@ async function deleteTask(id) {
   if (!confirm('Delete this task and its history?')) return;
   try {
     await API.deleteTask(id); toast('Task deleted.');
-    State.view === 'room-tasks' ? renderRoomTasks() : renderTasks();
+    reloadCurrentTaskView();
   } catch (err) { toast(err.message, 'error'); }
 }
 
-// ── TASK HISTORY (with editing) ──────────────────────────────
+function reloadCurrentTaskView() {
+  if (State.view === 'room-tasks') renderRoomTasks();
+  else if (State.view === 'all-tasks') renderAllTasks();
+  else renderTasks();
+}
+
+// ── TASK HISTORY ─────────────────────────────────────────────
 async function showTaskHistory(taskId, taskName) {
   let history;
   try { history = await API.getTaskHistory(taskId); }
@@ -973,7 +1334,7 @@ async function showTaskHistory(taskId, taskName) {
     const usageNote = h.usage_value ? `<span class="badge badge-cyan" style="margin-left:6px">${Number(h.usage_value).toLocaleString()}</span>` : '';
     return `
       <div class="history-row" id="hrow-${h.id}">
-        <span class="history-who">${esc(h.completed_by_name || '?')}</span>
+        <span class="history-who">${esc(h.completed_by_name||'?')}</span>
         <span style="flex:1">${formatDate(h.completed_at)}${usageNote}</span>
         <span style="font-size:12px;color:var(--text-muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.notes||'')}</span>
         <div class="history-actions">
@@ -985,23 +1346,18 @@ async function showTaskHistory(taskId, taskName) {
 
   const rows = history.length === 0
     ? '<p style="color:var(--text-muted);font-size:13px">No completions recorded yet.</p>'
-    : `<div class="history-list" id="history-list-${taskId}">${history.map(historyRowHtml).join('')}</div>`;
+    : `<div class="history-list">${history.map(historyRowHtml).join('')}</div>`;
 
   showModal(`HISTORY: ${esc(taskName.toUpperCase())}`,
-    `<div style="font-family:var(--font-mono);font-size:10px;letter-spacing:1px;color:var(--text-muted);margin-bottom:16px">
-       ${history.length} completion${history.length!==1?'s':''} — You can edit or delete past entries below.
-     </div>
-     <div class="alert alert-info" style="margin-bottom:16px;font-size:12px">
-       💡 To add a completion in the past, use the "Done" button on the task and change the date.
-     </div>
-     ${rows}`,
+    `<div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-bottom:16px">
+       ${history.length} completion${history.length!==1?'s':''} · edit or delete past entries below
+     </div>${rows}`,
     `<button class="btn btn-primary" onclick="closeModal()">Close</button>`, true);
 }
 
 function showEditCompletion(taskId, h) {
   showModal('EDIT COMPLETION',
-    `<div class="form-group">
-       <label>Completed At *</label>
+    `<div class="form-group"><label>Completed At *</label>
        <input type="datetime-local" id="f-edit-date" value="${formatDateTimeLocal(h.completed_at)}">
      </div>
      ${h.usage_value !== null && h.usage_value !== undefined ? `
@@ -1017,58 +1373,40 @@ async function submitEditCompletion(taskId, completionId) {
   const dateVal = document.getElementById('f-edit-date').value;
   if (!dateVal) return toast('Date is required', 'error');
   const usageEl = document.getElementById('f-edit-usage');
-  const payload = {
-    completed_at: new Date(dateVal).toISOString(),
-    notes: document.getElementById('f-edit-notes').value.trim(),
-  };
+  const payload = { completed_at: new Date(dateVal).toISOString(), notes: document.getElementById('f-edit-notes').value.trim() };
   if (usageEl) payload.usage_value = parseInt(usageEl.value) || null;
   try {
     await API.updateCompletion(taskId, completionId, payload);
     closeModal(); toast('Completion updated!');
-    // Re-render current view
-    State.view === 'room-tasks' ? renderRoomTasks() : renderTasks();
+    reloadCurrentTaskView();
   } catch (err) { toast(err.message, 'error'); }
 }
 
 async function deleteCompletion(taskId, completionId) {
-  if (!confirm('Delete this completion entry? This will recalculate the next due date.')) return;
+  if (!confirm('Delete this completion? This will recalculate the next due date.')) return;
   try {
     await API.deleteCompletion(taskId, completionId);
-    toast('Completion deleted.');
-    closeModal();
-    State.view === 'room-tasks' ? renderRoomTasks() : renderTasks();
+    toast('Completion deleted.'); closeModal();
+    reloadCurrentTaskView();
   } catch (err) { toast(err.message, 'error'); }
-}
-
-// ── Utility: JSON-safe attribute ─────────────────────────────
-// Serialize an object for safe embedding in an HTML double-quoted onclick attribute.
-// Escaping " as &quot; lets the browser decode it back to " before the JS engine
-// evaluates the attribute, so the function receives a real object literal, not a string.
-function J(obj) {
-  return JSON.stringify(obj).replace(/"/g, '&quot;');
 }
 
 // ── Init ─────────────────────────────────────────────────────
 (function init() {
   const token = API.getToken();
-  const user = API.getUser();
+  const user  = API.getUser();
   if (token && user) bootApp(user);
 
-  // Enter key handling
-  // FIX: Check if active element IS the button to prevent double-submit
   document.addEventListener('keydown', e => {
     if (e.key !== 'Enter') return;
-
     const modal = document.getElementById('active-modal');
     if (modal) {
-      // If focus is already on the primary button, let the browser handle it naturally
       if (document.activeElement && document.activeElement.id === 'submit-task-btn') return;
-      const btn = modal.querySelector('.modal-footer .btn-primary');
+      const btn = modal.querySelector('.modal-footer .btn-primary, .modal-footer .btn-success');
       if (btn) { e.preventDefault(); btn.click(); }
       return;
     }
-
-    if (document.getElementById('form-login').style.display !== 'none') doLogin();
+    if (document.getElementById('form-login').style.display    !== 'none') doLogin();
     if (document.getElementById('form-register').style.display !== 'none') doRegister();
   });
 })();

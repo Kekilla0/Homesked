@@ -68,3 +68,10 @@ const API = {
   updateCompletion:  (tid, cid, b)  => API.put(`/tasks/${tid}/history/${cid}`, b),
   deleteCompletion:  (tid, cid)     => API.delete(`/tasks/${tid}/history/${cid}`),
 };
+
+// Room all-tasks
+API.getRoomAllTasks = (id) => API.get(`/rooms/${id}/all-tasks`);
+
+// Room presets
+API.getRoomPresets = ()     => API.get('/room-presets');
+API.getRoomPreset  = (name) => API.get(`/room-presets/${encodeURIComponent(name)}`);
