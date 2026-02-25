@@ -1,6 +1,6 @@
 {
   "name": "homesked",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Home maintenance scheduler inspired by Navy PMS",
   "main": "server.js",
   "scripts": {

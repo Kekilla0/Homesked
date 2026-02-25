@@ -580,23 +580,34 @@ function navigateAllTasks(room) {
 }
 
 function showAddRoom() {
-  const presetOpts = State.roomPresets.map(p =>
-    `<option value="${esc(p.name)}">${esc(p.icon)} ${esc(p.name)}</option>`
-  ).join('');
+  // Ensure presets are loaded even if the boot fetch hasn't resolved yet
+  const openModal = (roomPresets) => {
+    const presetOpts = roomPresets.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.icon)} ${esc(p.name)}</option>`
+    ).join('');
 
-  showModal('ADD ROOM',
-    `<div class="form-group">
-       <label>Room Type (optional)</label>
-       <select id="f-room-preset" onchange="onRoomPresetChange()">
-         <option value="">— Select a type to auto-fill —</option>
-         ${presetOpts}
-       </select>
-       <div class="room-preset-summary" id="room-preset-summary"></div>
-     </div>
-     <div class="form-group"><label>Room Name *</label><input id="f-room-name" placeholder="e.g. Kitchen, Garage, Master Bath"></div>
-     <div class="form-group"><label>Description</label><textarea id="f-room-desc" placeholder="Optional notes"></textarea></div>`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-     <button class="btn btn-primary" id="submit-task-btn" onclick="submitAddRoom()">Add Room</button>`);
+    showModal('ADD ROOM',
+      `<div class="form-group">
+         <label>Room Type (optional)</label>
+         <select id="f-room-preset" onchange="onRoomPresetChange()">
+           <option value="">— Select a type to auto-fill —</option>
+           ${presetOpts}
+         </select>
+         <div class="room-preset-summary" id="room-preset-summary"></div>
+       </div>
+       <div class="form-group"><label>Room Name *</label><input id="f-room-name" placeholder="e.g. Kitchen, Garage, Master Bath"></div>
+       <div class="form-group"><label>Description</label><textarea id="f-room-desc" placeholder="Optional notes"></textarea></div>`,
+      `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+       <button class="btn btn-primary" id="submit-task-btn" onclick="submitAddRoom()">Add Room</button>`);
+  };
+
+  if (State.roomPresets.length > 0) {
+    openModal(State.roomPresets);
+  } else {
+    API.getRoomPresets()
+      .then(p => { State.roomPresets = p; openModal(p); })
+      .catch(() => openModal([]));
+  }
 }
 
 function onRoomPresetChange() {
@@ -651,53 +662,90 @@ function showEditRoom(room) {
 }
 
 async function submitAddRoom() {
-  const name = document.getElementById('f-room-name').value.trim(); if (!name) return;
-  const presetName = document.getElementById('f-room-preset')?.value || '';
+  const name = document.getElementById('f-room-name').value.trim();
+  if (!name) return;
+  const presetName = (document.getElementById('f-room-preset')?.value || '').trim();
+
+  // Disable button to prevent double-submit
+  const btn = document.getElementById('submit-task-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
+
+  let room;
   try {
-    const room = await API.createRoom({
+    room = await API.createRoom({
       home_id: State.currentHome.id,
       name,
-      description: document.getElementById('f-room-desc').value.trim()
+      description: document.getElementById('f-room-desc')?.value.trim() || ''
     });
+  } catch (err) {
+    toast('Failed to create room: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Add Room'; }
+    return;
+  }
 
-    if (presetName) {
-      try {
-        // Use cached preset if available, otherwise fetch
-        const full = window._roomPresetCache?.[presetName] || await API.getRoomPreset(presetName);
-
-        // Create room-level tasks
-        for (const t of full.roomTasks) {
-          await API.createTask({ room_id: room.id, name: t.name, description: t.description,
-            trigger_type: 'time', frequency_value: t.frequency_value, frequency_unit: t.frequency_unit });
-        }
-
-        // Create equipment + their tasks
-        for (const eq of full.defaultEquipment) {
-          const newEq = await API.createEquipment({
-            room_id: room.id, name: eq.name, description: eq.description || '',
-            preset_type: eq.preset_type || null,
-            usage_unit: eq.usage_unit || null,
-            current_usage: eq.usage_unit ? 0 : undefined,
-          });
-          for (const t of (eq.tasks || [])) {
-            await API.createTask({ equipment_id: newEq.id, ...t });
-          }
-        }
-
-        const totalTasks = full.roomTasks.length + full.defaultEquipment.reduce((s, e) => s + (e.tasks?.length || 0), 0);
-        toast(`Room added with ${full.defaultEquipment.length} equipment and ${totalTasks} tasks!`);
-      } catch (e) {
-        toast('Room added (preset setup failed: ' + e.message + ')', 'error');
-      }
-    } else {
-      toast('Room added!');
-    }
-
+  if (!presetName) {
+    toast('Room added!');
     closeModal();
     const rooms = await API.getRooms(State.currentHome.id);
     State.sidebarRooms = rooms;
-    renderRooms();
-  } catch (err) { toast(err.message, 'error'); }
+    return renderRooms();
+  }
+
+  // Apply preset
+  try {
+    const full = window._roomPresetCache?.[presetName] || await API.getRoomPreset(presetName);
+    if (!full) throw new Error('Preset "' + presetName + '" not found');
+
+    let roomTaskCount = 0, equipCount = 0, equipTaskCount = 0;
+
+    // Room-level tasks
+    for (const t of (full.roomTasks || [])) {
+      try {
+        await API.createTask({
+          room_id: room.id,
+          name: t.name,
+          description: t.description || '',
+          trigger_type: 'time',
+          frequency_value: t.frequency_value || 1,
+          frequency_unit: t.frequency_unit || 'month',
+        });
+        roomTaskCount++;
+      } catch (e) { console.error('Room task failed:', t.name, e.message); }
+    }
+
+    // Equipment + their tasks
+    for (const eq of (full.defaultEquipment || [])) {
+      let newEq;
+      try {
+        newEq = await API.createEquipment({
+          room_id: room.id,
+          name: eq.name,
+          description: eq.description || '',
+          preset_type: eq.preset_type || null,
+          usage_unit: eq.usage_unit || null,
+          current_usage: eq.usage_unit ? 0 : undefined,
+        });
+        equipCount++;
+      } catch (e) { console.error('Equipment failed:', eq.name, e.message); continue; }
+
+      for (const t of (eq.tasks || [])) {
+        try {
+          await API.createTask({ equipment_id: newEq.id, ...t });
+          equipTaskCount++;
+        } catch (e) { console.error('Equip task failed:', t.name, e.message); }
+      }
+    }
+
+    toast(`✓ ${name} created — ${roomTaskCount} room tasks, ${equipCount} equipment, ${equipTaskCount} equipment tasks`);
+  } catch (e) {
+    console.error('Preset apply error:', e);
+    toast('Room created but preset failed: ' + e.message, 'error');
+  }
+
+  closeModal();
+  const rooms = await API.getRooms(State.currentHome.id);
+  State.sidebarRooms = rooms;
+  renderRooms();
 }
 
 async function submitEditRoom(id) {
