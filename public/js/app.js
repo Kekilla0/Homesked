@@ -1041,14 +1041,12 @@ async function deleteCompletion(taskId, completionId) {
 }
 
 // ── Utility: JSON-safe attribute ─────────────────────────────
+// Serialize an object for safe embedding in an HTML double-quoted onclick attribute.
+// Escaping " as &quot; lets the browser decode it back to " before the JS engine
+// evaluates the attribute, so the function receives a real object literal, not a string.
 function J(obj) {
-  return "'" + JSON.stringify(obj).replace(/'/g,"&#39;").replace(/\//g,"\\/") + "'";
+  return JSON.stringify(obj).replace(/"/g, '&quot;');
 }
-
-// Wait, J() produces a string wrapped in single-quotes for use in onclick="fn(J(...))"
-// Let's actually make it produce proper JSON for inline use
-// Re-define using data attributes approach won't work easily, so keep using JSON.stringify
-// but ensure we escape properly for HTML attribute context
 
 // ── Init ─────────────────────────────────────────────────────
 (function init() {
