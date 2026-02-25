@@ -101,7 +101,7 @@ function initDB() {
   addColumn(db, 'equipment', 'current_usage', 'INTEGER');
   addColumn(db, 'equipment', 'usage_unit',    'TEXT');
 
-  addColumn(db, 'tasks', 'room_id',          'INTEGER REFERENCES rooms(id) ON DELETE CASCADE');
+  addColumn(db, 'tasks', 'room_id',          'INTEGER'); // FK omitted — SQLite rejects REFERENCES in ALTER TABLE
   addColumn(db, 'tasks', 'trigger_type',     "TEXT NOT NULL DEFAULT 'time'");
   addColumn(db, 'tasks', 'usage_unit',       'TEXT');
   addColumn(db, 'tasks', 'usage_interval',   'INTEGER');
