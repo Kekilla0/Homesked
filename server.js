@@ -6,16 +6,13 @@ const { initDB } = require('./db/init');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS — controlled via CORS_ORIGINS env var.
-// Defaults to * (open), fine for a home server behind your router.
-// For mobile app production: set CORS_ORIGINS to your server IP/domain in Portainer.
 const allowedOrigins = (process.env.CORS_ORIGINS || '*').split(',').map(s => s.trim());
 app.use(cors({
   origin: allowedOrigins.includes('*') ? '*' : (origin, cb) => {
     if (!origin || allowedOrigins.includes(origin)) cb(null, true);
     else cb(new Error('Not allowed by CORS'));
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -30,8 +27,8 @@ app.use('/api/rooms',     require('./routes/rooms'));
 app.use('/api/equipment', require('./routes/equipment'));
 app.use('/api/tasks',     require('./routes/tasks'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/presets',   require('./routes/presets').router);
 
-// Fallback — serve the SPA
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });

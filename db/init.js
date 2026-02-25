@@ -10,7 +10,6 @@ function getDB() {
   if (!db) {
     const dir = path.dirname(DB_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
@@ -18,67 +17,99 @@ function getDB() {
   return db;
 }
 
+// Safe migration helper — SQLite doesn't support IF NOT EXISTS for columns
+function addColumn(db, table, col, def) {
+  try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch {}
+}
+
 function initDB() {
   const db = getDB();
+
+  // ── Core tables (new installs) ──────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL COLLATE NOCASE,
-      email TEXT,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'member',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      username      TEXT    UNIQUE NOT NULL COLLATE NOCASE,
+      email         TEXT,
+      password_hash TEXT    NOT NULL,
+      role          TEXT    NOT NULL DEFAULT 'member',
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS homes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      address TEXT,
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      address    TEXT,
       created_by INTEGER REFERENCES users(id),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS rooms (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      home_id INTEGER NOT NULL REFERENCES homes(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      home_id     INTEGER NOT NULL REFERENCES homes(id) ON DELETE CASCADE,
+      name        TEXT    NOT NULL,
       description TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS equipment (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      description TEXT,
-      make TEXT,
-      model TEXT,
-      serial_number TEXT,
-      notes TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id        INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      name           TEXT    NOT NULL,
+      description    TEXT,
+      make           TEXT,
+      model          TEXT,
+      serial_number  TEXT,
+      notes          TEXT,
+      preset_type    TEXT,
+      current_usage  INTEGER,
+      usage_unit     TEXT,
+      created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      description TEXT,
-      frequency_value INTEGER NOT NULL DEFAULT 1,
-      frequency_unit TEXT NOT NULL DEFAULT 'month',
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      equipment_id      INTEGER REFERENCES equipment(id) ON DELETE CASCADE,
+      room_id           INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+      name              TEXT NOT NULL,
+      description       TEXT,
+      trigger_type      TEXT NOT NULL DEFAULT 'time',
+      frequency_value   INTEGER NOT NULL DEFAULT 1,
+      frequency_unit    TEXT NOT NULL DEFAULT 'month',
+      usage_unit        TEXT,
+      usage_interval    INTEGER,
+      last_usage_value  INTEGER,
+      next_due_usage    INTEGER,
       last_completed_at DATETIME,
-      next_due_at DATETIME,
-      created_by INTEGER REFERENCES users(id),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      next_due_at       DATETIME,
+      created_by        INTEGER REFERENCES users(id),
+      created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS task_completions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       completed_by INTEGER REFERENCES users(id),
       completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      notes TEXT
+      usage_value  INTEGER,
+      notes        TEXT
     );
   `);
+
+  // ── Migrations for existing databases ───────────────────────
+  addColumn(db, 'equipment', 'preset_type',   'TEXT');
+  addColumn(db, 'equipment', 'current_usage', 'INTEGER');
+  addColumn(db, 'equipment', 'usage_unit',    'TEXT');
+
+  addColumn(db, 'tasks', 'room_id',          'INTEGER REFERENCES rooms(id) ON DELETE CASCADE');
+  addColumn(db, 'tasks', 'trigger_type',     "TEXT NOT NULL DEFAULT 'time'");
+  addColumn(db, 'tasks', 'usage_unit',       'TEXT');
+  addColumn(db, 'tasks', 'usage_interval',   'INTEGER');
+  addColumn(db, 'tasks', 'last_usage_value', 'INTEGER');
+  addColumn(db, 'tasks', 'next_due_usage',   'INTEGER');
+
+  addColumn(db, 'task_completions', 'usage_value', 'INTEGER');
+
   console.log('[DB] Initialized at', DB_PATH);
 }
 
